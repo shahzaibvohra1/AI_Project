@@ -598,23 +598,22 @@ plt.show()
 
 
 
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, LabelEncoder
-from sklearn.feature_selection import SelectKBest, chi2
-from sklearn.ensemble import RandomForestClassifier
+# Data Preprocessing
+datafm['ACCLASS'] = np.where(datafm['ACCLASS'] == 'Property Damage O', 'Non-Fatal Injury', datafm['ACCLASS'])
+datafm = datafm.dropna(subset=['ACCLASS'])
 
+# Dropping irrelevant columns
+drop_columns = [
+    "datetime", "DATE", "TIME", "X", "Y", "OFFSET", "FATAL_NO", "PEDTYPE", "PEDACT", "PEDCOND",
+    "CYCLISTYPE", "CYCACT", "CYCCOND", "DISABILITY", "LATITUDE", "LONGITUDE", "STREET1", 
+    "STREET2", "ACCNUM", "LIGHT", "INJURY", "DIVISION", "MANOEUVER", "INITDIR", "INVAGE", 
+    "VEHTYPE", "DRIVACT", "DRIVCOND", "HOOD_158", "NEIGHBOURHOOD_158", "HOOD_140", 
+    "OBJECTID", "INDEX_"
+]
+drop_columns = [col for col in drop_columns if col in datafm.columns]
+datafm = datafm.drop(columns=drop_columns)
 
-dropColumns = ["datetime","DATE","TIME","X","Y","OFFSET", "FATAL_NO", "PEDTYPE", "PEDACT", "PEDCOND",
-               "CYCLISTYPE", "CYCACT", "CYCCOND","DISABILITY", "LATITUDE", "LONGITUDE",
-                "STREET1","STREET2","ACCNUM","LIGHT","INJURY","DIVISION", "MANOEUVER",
-                 "INITDIR", "INVAGE", "VEHTYPE","DRIVACT", "DRIVCOND", "HOOD_158", 
-                 "NEIGHBOURHOOD_158", "HOOD_140","OBJECTID","INDEX_" ]
-
-datafm = datafm.drop(columns=dropColumns)
-
-# Encode target variable 'ACCLASS' using LabelEncoder
+# Encode target variable 'ACCLASS'
 label_encoder = LabelEncoder()
 datafm['ACCLASS'] = label_encoder.fit_transform(datafm['ACCLASS'])
 
@@ -628,20 +627,85 @@ categorical_columns = X.select_dtypes(include=['object']).columns.tolist()
 # Define preprocessing steps for the pipeline
 preprocessor = ColumnTransformer(
     transformers=[
-        ('cat', OneHotEncoder(drop='first'), categorical_columns)
+        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_columns),
+        ('num', SimpleImputer(strategy='median'), X.select_dtypes(include=[np.number]).columns.tolist())
     ],
     remainder='passthrough'
 )
 
-# Create pipeline including feature selection and model
-pipeline = Pipeline([
-    ('preprocessor', preprocessor),
-    ('feature_selection', SelectKBest(score_func=chi2, k=20)),  # Select top 20 features using chi2
-    ('classifier', RandomForestClassifier())  # RandomForestClassifier as an example
-])
+# Define models and parameters for Grid Search and Randomized Grid Search
+models = {
+    'Logistic Regression': (LogisticRegression(max_iter=3000), {
+        'classifier__C': [0.001, 0.01, 0.1, 1, 10, 100],
+        'classifier__solver': ['liblinear', 'saga']
+    }),
+    'Decision Tree': (DecisionTreeClassifier(), {
+        'classifier__max_depth': [None, 10, 20, 30, 40],
+        'classifier__min_samples_split': [2, 5, 10],
+        'classifier__min_samples_leaf': [1, 2, 4]
+    }),
+    'SVM': (SVC(), {
+        'classifier__C': [0.1, 1, 10],
+        'classifier__gamma': ['scale', 'auto'],
+        'classifier__kernel': ['linear', 'rbf', 'poly']
+    }),
+    'Random Forest': (RandomForestClassifier(), {
+        'classifier__n_estimators': [10, 50, 100, 200],
+        'classifier__max_depth': [None, 10, 20, 30],
+        'classifier__min_samples_split': [2, 5, 10],
+        'classifier__min_samples_leaf': [1, 2, 4]
+    }),
+    'Neural Network': (MLPClassifier(max_iter=1000), {
+        'classifier__hidden_layer_sizes': [(50,), (100,), (50, 50)],
+        'classifier__activation': ['tanh', 'relu'],
+        'classifier__solver': ['adam', 'sgd']
+    })
+}
 
-# Perform stratified train-test split
+# Perform Train-Test Split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
-# Fit pipeline on training data
-pipeline.fit(X_train, y_train)
+# Model training, tuning, and evaluation
+for model_name, (model, params) in models.items():
+    print(f"\nModel: {model_name}")
+    
+    # Create pipeline
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('feature_selection', SelectKBest(score_func=chi2, k=20)),
+        ('classifier', model)
+    ])
+    
+    # Grid Search
+    grid_search = GridSearchCV(pipeline, params, cv=5, scoring='accuracy', verbose=2, n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+    
+    # Randomized Grid Search
+    randomized_search = RandomizedSearchCV(pipeline, params, n_iter=20, cv=5, scoring='accuracy', verbose=2, n_jobs=-1, random_state=42)
+    randomized_search.fit(X_train, y_train)
+    
+    # Evaluate best model from Grid Search
+    print("Best parameters from Grid Search:")
+    print(grid_search.best_params_)
+    print("Best score from Grid Search:")
+    print(grid_search.best_score_)
+    
+    best_model_grid = grid_search.best_estimator_
+    y_pred_grid = best_model_grid.predict(X_test)
+    print("Classification Report for Grid Search:")
+    print(classification_report(y_test, y_pred_grid))
+    print("Accuracy Score for Grid Search:")
+    print(accuracy_score(y_test, y_pred_grid))
+    
+    # Evaluate best model from Randomized Grid Search
+    print("Best parameters from Randomized Grid Search:")
+    print(randomized_search.best_params_)
+    print("Best score from Randomized Grid Search:")
+    print(randomized_search.best_score_)
+    
+    best_model_randomized = randomized_search.best_estimator_
+    y_pred_randomized = best_model_randomized.predict(X_test)
+    print("Classification Report for Randomized Grid Search:")
+    print(classification_report(y_test, y_pred_randomized))
+    print("Accuracy Score for Randomized Grid Search:")
+    print(accuracy_score(y_test, y_pred_randomized))
